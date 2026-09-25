@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
+
+from mood_dj.adapters.sqlite_connection import open_connection
 
 _CREATE_TONE_TABLE = """
 CREATE TABLE IF NOT EXISTS lyrics_tone (
@@ -35,8 +36,8 @@ class SqliteJudgmentCache:
             connection.execute(_CREATE_TONE_TABLE)
             connection.execute(_CREATE_FIT_TABLE)
 
-    def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._db_path)
+    def _connect(self):
+        return open_connection(self._db_path)
 
     def get_tone(self, track_id: str, question_version: str) -> float | None:
         with self._connect() as connection:

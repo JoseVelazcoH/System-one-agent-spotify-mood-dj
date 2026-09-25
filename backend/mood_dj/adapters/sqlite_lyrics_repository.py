@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
+
+from mood_dj.adapters.sqlite_connection import open_connection
 
 from mood_dj.domain.models import LyricsEntry, LyricsStatus
 
@@ -26,8 +27,8 @@ class SqliteLyricsRepository:
         with self._connect() as connection:
             connection.execute(_CREATE_TABLE)
 
-    def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._db_path)
+    def _connect(self):
+        return open_connection(self._db_path)
 
     def get(self, track_id: str) -> LyricsEntry | None:
         with self._connect() as connection:
