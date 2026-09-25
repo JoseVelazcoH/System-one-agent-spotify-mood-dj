@@ -18,6 +18,7 @@ from mood_dj.adapters.spotify_playlists import SpotifyPlaylistsClient
 from mood_dj.application.prepare_job_manager import PrepareJobManager
 from mood_dj.application.prepare_playlist import PreparePlaylistUseCase
 from mood_dj.application.recommend_from_playlist import RecommendFromPlaylistUseCase
+from mood_dj.application.recommend_job_manager import RecommendJobManager
 from mood_dj.config import Settings, load_settings
 from mood_dj.domain.models import SpotifyTokens
 from mood_dj.ports.auth_state_store import AuthStateStore
@@ -98,6 +99,11 @@ def get_recommend_from_playlist_use_case() -> RecommendFromPlaylistUseCase:
         judgment_cache=get_judgment_cache(),
         lyrics_judge=get_lyrics_judge(),
     )
+
+
+@lru_cache(maxsize=1)
+def get_recommend_job_manager() -> RecommendJobManager:
+    return RecommendJobManager(use_case_factory=get_recommend_from_playlist_use_case)
 
 
 def get_session_id(session_id: str | None = Cookie(default=None)) -> str:

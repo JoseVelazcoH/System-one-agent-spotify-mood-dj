@@ -7,6 +7,7 @@ import pytest
 from mood_dj.application.recommend_from_playlist import (
     PlaylistNotPreparedError,
     RecommendFromPlaylistUseCase,
+    RecommendPhase,
 )
 from mood_dj.domain.models import LyricsEntry, LyricsStatus, PlaylistTrack, Strategy
 from mood_dj.domain.playlist_strategy import PlaylistSignals
@@ -76,7 +77,7 @@ class FakeLyricsJudge:
     def detect_signals(self, prompt: str):
         return self.strategy_signals, {"feels_bad": 1.0, "wants_change": 1.0, "wants_energy": 0.0, "wants_rest": 0.0}
 
-    def judge_lyrics(self, prompt, strategy, tracks):
+    def judge_lyrics(self, prompt, strategy, tracks, on_progress=None):
         self.judge_calls += 1
         results = []
         for item in tracks:
@@ -88,6 +89,8 @@ class FakeLyricsJudge:
                     fit=self.fits[item.track.id],
                 )
             )
+        if on_progress is not None and tracks:
+            on_progress(len(tracks))
         return results
 
 
@@ -220,3 +223,35 @@ def test_max_candidates_limits_judged_tracks() -> None:
 
     total_tracks = sum(len(stage.tracks) for stage in result.stages)
     assert total_tracks == 3
+
+
+def test_reports_progress_through_all_phases() -> None:
+    tracks = [_track("cached"), _track("fresh")]
+    entries = {tid: _entry(tid, LyricsStatus.LYRICS) for tid in ["cached", "fresh"]}
+    cache = FakeJudgmentCache()
+    cache.save_tone("cached", "v1", 0.5)
+    import hashlib
+
+    prompt = "prompt"
+    prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    cache.save_fit("cached", prompt_hash, "v1", 0.7)
+    judge = FakeLyricsJudge(ACCOMPANY_SIGNALS, {"fresh": 0.5}, {"fresh": 0.5})
+    use_case = RecommendFromPlaylistUseCase(
+        playlists_client=FakePlaylistsClient(tracks),
+        lyrics_repository=FakeLyricsRepository(entries),
+        judgment_cache=cache,
+        lyrics_judge=judge,
+    )
+    calls: list[tuple[RecommendPhase, int, int]] = []
+
+    use_case.run(prompt, "playlist-1", "token", on_progress=lambda phase, processed, total: calls.append((phase, processed, total)))
+
+    phases = [call[0] for call in calls]
+    assert phases[0] is RecommendPhase.DETECTING_MOOD
+    assert RecommendPhase.JUDGING_LYRICS in phases
+    assert phases[-1] is RecommendPhase.BUILDING_PLAYLIST
+    judging_calls = [call for call in calls if call[0] is RecommendPhase.JUDGING_LYRICS]
+    # First judging_lyrics call already counts the cache hit; the last one counts both.
+    assert judging_calls[0][1] == 1
+    assert judging_calls[0][2] == 2
+    assert judging_calls[-1][1] == 2

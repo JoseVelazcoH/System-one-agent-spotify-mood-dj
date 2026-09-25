@@ -96,3 +96,16 @@ class PrepareStatusResponse(BaseModel):
     instrumental: int
     missing: int
     error: str | None = None
+
+
+class RecommendJobStartedResponse(BaseModel):
+    job_id: str
+
+
+class RecommendJobStatusResponse(BaseModel):
+    state: str
+    phase: str
+    processed: int
+    total: int
+    result: PlaylistRecommendResponse | None = None
+    error: str | None = None

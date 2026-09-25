@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Callable, Protocol
 
 from mood_dj.domain.models import PlaylistTrack, Strategy
 from mood_dj.domain.playlist_strategy import PlaylistSignals
+
+# Called with the number of tracks judged in the batch that just completed, so
+# callers can accumulate a running total across chunks.
+JudgeProgressCallback = Callable[[int], None]
 
 
 @dataclass(frozen=True)
@@ -39,7 +43,16 @@ class LyricsJudge(Protocol):
         ...
 
     def judge_lyrics(
-        self, prompt: str, strategy: Strategy, tracks: list[TrackLyrics]
+        self,
+        prompt: str,
+        strategy: Strategy,
+        tracks: list[TrackLyrics],
+        on_progress: JudgeProgressCallback | None = None,
     ) -> list[TrackJudgment]:
-        """Judge tone and fit for each track, in the same order as `tracks`."""
+        """Judge tone and fit for each track, in the same order as `tracks`.
+
+        Implementations may process `tracks` in chunks and call `on_progress`
+        with the chunk size after each chunk completes, so callers can report
+        incremental progress on long-running batches.
+        """
         ...

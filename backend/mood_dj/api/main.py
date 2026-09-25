@@ -31,6 +31,7 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(playlists.router)
+app.include_router(playlists.recommend_jobs_router)
 
 
 @lru_cache(maxsize=1)

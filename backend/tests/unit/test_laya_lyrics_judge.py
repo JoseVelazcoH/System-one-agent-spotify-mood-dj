@@ -134,3 +134,30 @@ def test_judge_lyrics_returns_empty_list_for_no_tracks() -> None:
 
     assert result == []
     assert router.predict_batch_calls == []
+
+
+def test_judge_lyrics_processes_tracks_in_chunks_and_reports_progress() -> None:
+    answer = {"answers": {"tone": {"score": 2.0}, "fit": {"noul": 0.5}}}
+    router = FakeRouter(
+        batch_results=[answer, answer, answer, answer]  # enough for the largest single chunk call
+    )
+    judge = LayaLyricsJudge(router=router, batch_size=4)
+    tracks = [TrackLyrics(track=_track(str(i)), text="la") for i in range(10)]
+    progress_calls: list[int] = []
+
+    judgments = judge.judge_lyrics("prompt", Strategy.LIFT, tracks, on_progress=progress_calls.append)
+
+    assert len(router.predict_batch_calls) == 3
+    assert [len(call) for call in router.predict_batch_calls] == [4, 4, 2]
+    assert progress_calls == [4, 4, 2]
+    assert len(judgments) == 10
+    assert [j.track_id for j in judgments] == [str(i) for i in range(10)]
+
+
+def test_judge_lyrics_without_progress_callback_still_works() -> None:
+    router = FakeRouter(batch_results=[{"answers": {"tone": {"score": 2.0}, "fit": {"noul": 0.5}}}])
+    judge = LayaLyricsJudge(router=router, batch_size=8)
+
+    judgments = judge.judge_lyrics("prompt", Strategy.LIFT, [TrackLyrics(track=_track(), text="la")])
+
+    assert len(judgments) == 1

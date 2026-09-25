@@ -6,6 +6,8 @@ import hashlib
 import logging
 import time
 from dataclasses import dataclass, field
+from enum import Enum
+from typing import Callable
 
 from mood_dj.domain.models import LyricsStatus, PlaylistTrack, Strategy
 from mood_dj.domain.playlist_strategy import resolve_playlist_strategy
@@ -30,6 +32,19 @@ LIFT_BAND_BOUNDS = [(0.0, 0.4), (0.4, 0.7), (0.7, 1.01)]
 
 class PlaylistNotPreparedError(Exception):
     """Raised when a playlist has no cached lyrics at all: /prepare was never run."""
+
+
+class RecommendPhase(str, Enum):
+    """The stage a recommendation run is currently in, for progress reporting."""
+
+    DETECTING_MOOD = "detecting mood"
+    JUDGING_LYRICS = "judging lyrics"
+    BUILDING_PLAYLIST = "building playlist"
+
+
+# Called with (phase, processed, total). `processed`/`total` are only meaningful
+# during JUDGING_LYRICS (track counts); other phases report (0, 0).
+RecommendProgressCallback = Callable[[RecommendPhase, int, int], None]
 
 
 @dataclass(frozen=True)
@@ -75,7 +90,17 @@ class RecommendFromPlaylistUseCase:
         self._tracks_per_stage = tracks_per_stage
         self._lyrics_truncate_chars = lyrics_truncate_chars
 
-    def run(self, prompt: str, playlist_id: str, access_token: str) -> PlaylistRecommendation:
+    def run(
+        self,
+        prompt: str,
+        playlist_id: str,
+        access_token: str,
+        on_progress: RecommendProgressCallback | None = None,
+    ) -> PlaylistRecommendation:
+        def emit(phase: RecommendPhase, processed: int = 0, total: int = 0) -> None:
+            if on_progress is not None:
+                on_progress(phase, processed, total)
+
         start = time.perf_counter()
         tracks = self._playlists_client.get_playlist_tracks(playlist_id, access_token)
         entries = [(track, self._lyrics_repository.get(track.id)) for track in tracks]
@@ -98,15 +123,17 @@ class RecommendFromPlaylistUseCase:
 
         usable = usable[: self._max_candidates]
 
+        emit(RecommendPhase.DETECTING_MOOD)
         signals, signal_probabilities = self._lyrics_judge.detect_signals(prompt)
         strategy = resolve_playlist_strategy(signals)
 
-        judgments = self._judge_with_cache(prompt, strategy, usable)
+        judgments = self._judge_with_cache(prompt, strategy, usable, on_progress=emit)
         ranked = [
             RankedTrack(track=track, tone=judgments[track.id].tone, fit=judgments[track.id].fit)
             for track, _ in usable
         ]
 
+        emit(RecommendPhase.BUILDING_PLAYLIST, len(usable), len(usable))
         if strategy is Strategy.LIFT:
             stages = self._lift_stages(ranked)
         else:
@@ -131,11 +158,21 @@ class RecommendFromPlaylistUseCase:
         )
 
     def _judge_with_cache(
-        self, prompt: str, strategy: Strategy, usable: list[tuple[PlaylistTrack, str]]
+        self,
+        prompt: str,
+        strategy: Strategy,
+        usable: list[tuple[PlaylistTrack, str]],
+        on_progress: RecommendProgressCallback | None = None,
     ) -> dict[str, TrackJudgment]:
         prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
         judgments: dict[str, TrackJudgment] = {}
         to_judge: list[tuple[PlaylistTrack, str]] = []
+        total = len(usable)
+        processed = 0
+
+        def emit_judging() -> None:
+            if on_progress is not None:
+                on_progress(RecommendPhase.JUDGING_LYRICS, processed, total)
 
         for track, text in usable:
             tone = self._judgment_cache.get_tone(track.id, QUESTION_SET_VERSION)
@@ -144,13 +181,22 @@ class RecommendFromPlaylistUseCase:
                 to_judge.append((track, text))
             else:
                 judgments[track.id] = TrackJudgment(track_id=track.id, tone=tone, fit=fit)
+                processed += 1
+
+        emit_judging()
 
         if to_judge:
             batch = [
                 TrackLyrics(track=track, text=text[: self._lyrics_truncate_chars])
                 for track, text in to_judge
             ]
-            results = self._lyrics_judge.judge_lyrics(prompt, strategy, batch)
+
+            def on_batch_done(batch_size: int) -> None:
+                nonlocal processed
+                processed += batch_size
+                emit_judging()
+
+            results = self._lyrics_judge.judge_lyrics(prompt, strategy, batch, on_progress=on_batch_done)
             for result in results:
                 self._judgment_cache.save_tone(result.track_id, QUESTION_SET_VERSION, result.tone)
                 self._judgment_cache.save_fit(

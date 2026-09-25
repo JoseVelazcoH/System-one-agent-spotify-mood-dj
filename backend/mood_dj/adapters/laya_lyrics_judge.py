@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from mood_dj.domain.models import Strategy
 from mood_dj.domain.playlist_strategy import PlaylistSignals
-from mood_dj.ports.lyrics_judge import TrackJudgment, TrackLyrics
+from mood_dj.ports.lyrics_judge import JudgeProgressCallback, TrackJudgment, TrackLyrics
 
 MODEL_NAME = "multilingual"
 
@@ -32,6 +32,11 @@ MODEL_NAME = "multilingual"
 QUESTION_SET_VERSION = "v1"
 
 DEFAULT_LYRICS_TRUNCATE_CHARS = 1500
+
+# `judge_lyrics` splits its work into chunks of this size, calling `predict_batch`
+# once per chunk and reporting progress after each one, so a large playlist reports
+# incremental progress instead of blocking silently for the whole batch.
+DEFAULT_BATCH_SIZE = 8
 
 # Score levels for lyrics tone, index 0..4, normalized to 0.0-1.0.
 TONE_LEVELS = [
@@ -93,13 +98,19 @@ def _signal_questions() -> dict:
 class LayaLyricsJudge:
     """Adapts the Laya Router (multilingual checkpoint) to the LyricsJudge port."""
 
-    def __init__(self, router=None, lyrics_truncate_chars: int = DEFAULT_LYRICS_TRUNCATE_CHARS) -> None:
+    def __init__(
+        self,
+        router=None,
+        lyrics_truncate_chars: int = DEFAULT_LYRICS_TRUNCATE_CHARS,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+    ) -> None:
         if router is None:
             from laya import Router
 
             router = Router()
         self._router = router
         self._lyrics_truncate_chars = lyrics_truncate_chars
+        self._batch_size = batch_size
 
     def detect_signals(self, prompt: str) -> tuple[PlaylistSignals, dict[str, float]]:
         result = self._router.predict(prompt, _signal_questions(), model=MODEL_NAME)
@@ -114,7 +125,11 @@ class LayaLyricsJudge:
         return signals, probabilities
 
     def judge_lyrics(
-        self, prompt: str, strategy: Strategy, tracks: list[TrackLyrics]
+        self,
+        prompt: str,
+        strategy: Strategy,
+        tracks: list[TrackLyrics],
+        on_progress: JudgeProgressCallback | None = None,
     ) -> list[TrackJudgment]:
         if not tracks:
             return []
@@ -135,24 +150,31 @@ class LayaLyricsJudge:
                 },
             },
         }
-        requests = [
-            {
-                "state": {
-                    "prompt": prompt,
-                    "lyrics": item.text[: self._lyrics_truncate_chars],
-                },
-                "questions": questions,
-                "model": MODEL_NAME,
-            }
-            for item in tracks
-        ]
-        results = self._router.predict_batch(requests)
-
         max_index = len(TONE_LEVELS) - 1
-        judgments = []
-        for item, result in zip(tracks, results):
-            answers = result["answers"]
-            tone = max(0.0, min(1.0, float(answers["tone"]["score"]) / max_index))
-            fit = float(answers["fit"]["noul"])
-            judgments.append(TrackJudgment(track_id=item.track.id, tone=tone, fit=fit))
+        judgments: list[TrackJudgment] = []
+
+        for start in range(0, len(tracks), self._batch_size):
+            chunk = tracks[start : start + self._batch_size]
+            requests = [
+                {
+                    "state": {
+                        "prompt": prompt,
+                        "lyrics": item.text[: self._lyrics_truncate_chars],
+                    },
+                    "questions": questions,
+                    "model": MODEL_NAME,
+                }
+                for item in chunk
+            ]
+            results = self._router.predict_batch(requests)
+
+            for item, result in zip(chunk, results):
+                answers = result["answers"]
+                tone = max(0.0, min(1.0, float(answers["tone"]["score"]) / max_index))
+                fit = float(answers["fit"]["noul"])
+                judgments.append(TrackJudgment(track_id=item.track.id, tone=tone, fit=fit))
+
+            if on_progress is not None:
+                on_progress(len(chunk))
+
         return judgments
