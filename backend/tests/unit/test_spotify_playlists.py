@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from mood_dj.adapters.spotify_playlists import (
+    CURRENT_USER_URL,
     HttpxSpotifyPlaylistsHttpClient,
     PLAYLISTS_URL,
     SpotifyPlaylistsClient,
@@ -19,6 +20,8 @@ class FakeHttpClient:
 
     def get(self, url: str, access_token: str) -> dict:
         self.calls.append(url)
+        if url == CURRENT_USER_URL and url not in self.pages:
+            return {"id": "me"}
         return self.pages[url]
 
 
@@ -49,6 +52,51 @@ def test_list_playlists_maps_fields() -> None:
     assert playlists[0].image_url == "https://img/1.jpg"
     assert playlists[0].track_count == 42
     assert playlists[0].snapshot_id == "snap1"
+
+
+def test_list_playlists_reads_track_count_from_items_key() -> None:
+    # The current Spotify API reports the count under "items", not "tracks".
+    http = FakeHttpClient(
+        {
+            PLAYLISTS_URL + "?limit=50": {
+                "items": [{"id": "pl1", "name": "New Shape", "images": [], "items": {"total": 6}, "snapshot_id": "s"}],
+                "next": None,
+            }
+        }
+    )
+    client = SpotifyPlaylistsClient(http_client=http)
+
+    playlists = client.list_playlists("token")
+
+    assert playlists[0].track_count == 6
+
+
+def test_list_playlists_keeps_only_owned_or_collaborative_playlists() -> None:
+    # Spotify answers 403 when reading tracks of playlists the user does not own.
+    http = FakeHttpClient(
+        {
+            PLAYLISTS_URL + "?limit=50": {
+                "items": [
+                    {"id": "mine", "name": "Mine", "images": [], "owner": {"id": "me"}, "snapshot_id": "s"},
+                    {"id": "followed", "name": "Followed", "images": [], "owner": {"id": "someone"}, "snapshot_id": "s"},
+                    {
+                        "id": "shared",
+                        "name": "Shared",
+                        "images": [],
+                        "owner": {"id": "someone"},
+                        "collaborative": True,
+                        "snapshot_id": "s",
+                    },
+                ],
+                "next": None,
+            }
+        }
+    )
+    client = SpotifyPlaylistsClient(http_client=http)
+
+    playlists = client.list_playlists("token")
+
+    assert [playlist.id for playlist in playlists] == ["mine", "shared"]
 
 
 def test_list_playlists_handles_missing_images() -> None:

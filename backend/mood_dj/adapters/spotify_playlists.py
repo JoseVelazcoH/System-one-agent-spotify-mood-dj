@@ -16,6 +16,7 @@ import httpx
 from mood_dj.domain.models import PlaylistSummary, PlaylistTrack
 
 PLAYLISTS_URL = "https://api.spotify.com/v1/me/playlists"
+CURRENT_USER_URL = "https://api.spotify.com/v1/me"
 PLAYLISTS_PAGE_LIMIT = 50
 ITEMS_PAGE_LIMIT = 50
 REQUEST_TIMEOUT = 10.0
@@ -53,14 +54,21 @@ class SpotifyPlaylistsClient:
         self._http_client = http_client or HttpxSpotifyPlaylistsHttpClient()
 
     def list_playlists(self, access_token: str) -> list[PlaylistSummary]:
+        user_id = self._http_client.get(CURRENT_USER_URL, access_token).get("id")
         playlists: list[PlaylistSummary] = []
         url: str | None = f"{PLAYLISTS_URL}?limit={PLAYLISTS_PAGE_LIMIT}"
         while url:
             page = self._http_client.get(url, access_token)
             for item in page.get("items", []):
-                playlists.append(self._map_playlist(item))
+                if self._is_readable(item, user_id):
+                    playlists.append(self._map_playlist(item))
             url = page.get("next")
         return playlists
+
+    def _is_readable(self, item: dict, user_id: str | None) -> bool:
+        # Spotify answers 403 on the tracks of playlists the user only follows.
+        owner_id = (item.get("owner") or {}).get("id")
+        return owner_id is None or owner_id == user_id or bool(item.get("collaborative"))
 
     def get_playlist_tracks(self, playlist_id: str, access_token: str) -> list[PlaylistTrack]:
         tracks: list[PlaylistTrack] = []
@@ -80,7 +88,7 @@ class SpotifyPlaylistsClient:
             id=item["id"],
             name=item["name"],
             image_url=images[0]["url"] if images else None,
-            track_count=item.get("tracks", {}).get("total", 0),
+            track_count=(item.get("items") or item.get("tracks") or {}).get("total", 0),
             snapshot_id=item.get("snapshot_id", ""),
         )
 
