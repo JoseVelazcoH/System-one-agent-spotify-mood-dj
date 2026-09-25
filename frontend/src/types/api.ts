@@ -84,3 +84,18 @@ export interface PlaylistRecommendResponse {
   stages: PlaylistStage[];
   excluded: Excluded;
 }
+
+export interface RecommendJobStarted {
+  job_id: string;
+}
+
+export type RecommendJobState = "running" | "done" | "error";
+
+export interface RecommendJobStatus {
+  state: RecommendJobState;
+  phase: string;
+  processed: number;
+  total: number;
+  result: PlaylistRecommendResponse | null;
+  error: string | null;
+}

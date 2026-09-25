@@ -3,39 +3,30 @@ import "./App.css";
 import {
   ApiError,
   fetchMe,
-  fetchPlaylistRecommendation,
   fetchPlaylists,
   fetchPrepareStatus,
-  fetchRecommendation,
+  fetchRecommendJob,
   loginUrl,
   logout,
   preparePlaylist,
+  startRecommendJob,
 } from "./api";
-import { DecisionTrace } from "./components/DecisionTrace";
-import { ModeSwitch, type Mode } from "./components/ModeSwitch";
 import { PlaylistPicker } from "./components/PlaylistPicker";
 import { PlaylistResults } from "./components/PlaylistResults";
 import { PrepareProgress } from "./components/PrepareProgress";
 import { PromptForm } from "./components/PromptForm";
-import { StageTracks } from "./components/StageTracks";
+import { RecommendProgress } from "./components/RecommendProgress";
 import type {
   PlaylistRecommendResponse,
   PlaylistSummary,
   PrepareStatus,
-  RecommendResponse,
+  RecommendJobStatus,
 } from "./types/api";
 
 const POLL_INTERVAL_MS = 1500;
+const RECOMMEND_POLL_INTERVAL_MS = 1000;
 
 function App() {
-  const [mode, setMode] = useState<Mode>("library");
-
-  // Discover mode state
-  const [decision, setDecision] = useState<RecommendResponse | null>(null);
-  const [discoverLoading, setDiscoverLoading] = useState(false);
-  const [discoverError, setDiscoverError] = useState<string | null>(null);
-
-  // Library mode state
   const [authChecked, setAuthChecked] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
   const [playlists, setPlaylists] = useState<PlaylistSummary[]>([]);
@@ -44,10 +35,12 @@ function App() {
   const [prepareStatus, setPrepareStatus] = useState<PrepareStatus | null>(null);
   const [playlistResult, setPlaylistResult] = useState<PlaylistRecommendResponse | null>(null);
   const [playlistLoading, setPlaylistLoading] = useState(false);
+  const [recommendStatus, setRecommendStatus] = useState<RecommendJobStatus | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recommendPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    if (mode !== "library" || authChecked) {
+    if (authChecked) {
       return;
     }
     fetchMe()
@@ -59,10 +52,10 @@ function App() {
         setLoggedIn(false);
         setAuthChecked(true);
       });
-  }, [mode, authChecked]);
+  }, [authChecked]);
 
   useEffect(() => {
-    if (mode !== "library" || !authChecked || !loggedIn) {
+    if (!authChecked || !loggedIn) {
       return;
     }
     setLibraryError(null);
@@ -75,12 +68,15 @@ function App() {
         }
         setLibraryError(err instanceof Error ? err.message : "Failed to load playlists");
       });
-  }, [mode, authChecked, loggedIn]);
+  }, [authChecked, loggedIn]);
 
   useEffect(() => {
     return () => {
       if (pollTimerRef.current) {
         clearInterval(pollTimerRef.current);
+      }
+      if (recommendPollTimerRef.current) {
+        clearInterval(recommendPollTimerRef.current);
       }
     };
   }, []);
@@ -110,8 +106,12 @@ function App() {
 
   const handleSelectPlaylist = async (playlist: PlaylistSummary) => {
     stopPolling();
+    stopRecommendPolling();
     setSelectedPlaylist(playlist);
+    window.scrollTo({ top: 0, behavior: "smooth" });
     setPlaylistResult(null);
+    setRecommendStatus(null);
+    setPlaylistLoading(false);
     setLibraryError(null);
     setPrepareStatus({ state: "running", total: 0, processed: 0, with_lyrics: 0, instrumental: 0, missing: 0, error: null });
     try {
@@ -126,18 +126,34 @@ function App() {
     }
   };
 
-  const handleDiscoverSubmit = async (prompt: string) => {
-    setDiscoverLoading(true);
-    setDiscoverError(null);
-    try {
-      const result = await fetchRecommendation(prompt);
-      setDecision(result);
-    } catch (err) {
-      setDiscoverError(err instanceof Error ? err.message : "Something went wrong");
-      setDecision(null);
-    } finally {
-      setDiscoverLoading(false);
+  const stopRecommendPolling = () => {
+    if (recommendPollTimerRef.current) {
+      clearInterval(recommendPollTimerRef.current);
+      recommendPollTimerRef.current = null;
     }
+  };
+
+  const pollRecommendJob = (jobId: string) => {
+    stopRecommendPolling();
+    recommendPollTimerRef.current = setInterval(async () => {
+      try {
+        const status = await fetchRecommendJob(jobId);
+        setRecommendStatus(status);
+        if (status.state === "done") {
+          stopRecommendPolling();
+          setPlaylistResult(status.result);
+          setPlaylistLoading(false);
+        } else if (status.state === "error") {
+          stopRecommendPolling();
+          setLibraryError(status.error ?? "Failed to get recommendation");
+          setPlaylistLoading(false);
+        }
+      } catch (err) {
+        stopRecommendPolling();
+        setPlaylistLoading(false);
+        setLibraryError(err instanceof Error ? err.message : "Failed to check recommendation status");
+      }
+    }, RECOMMEND_POLL_INTERVAL_MS);
   };
 
   const handlePlaylistSubmit = async (prompt: string) => {
@@ -146,9 +162,11 @@ function App() {
     }
     setPlaylistLoading(true);
     setLibraryError(null);
+    setPlaylistResult(null);
+    setRecommendStatus({ state: "running", phase: "detecting mood", processed: 0, total: 0, result: null, error: null });
     try {
-      const result = await fetchPlaylistRecommendation(selectedPlaylist.id, prompt);
-      setPlaylistResult(result);
+      const { job_id: jobId } = await startRecommendJob(selectedPlaylist.id, prompt);
+      pollRecommendJob(jobId);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         setLoggedIn(false);
@@ -159,22 +177,38 @@ function App() {
         setLibraryError(err instanceof Error ? err.message : "Failed to get recommendation");
       }
       setPlaylistResult(null);
-    } finally {
+      setRecommendStatus(null);
       setPlaylistLoading(false);
     }
   };
 
   const handleLogout = async () => {
     stopPolling();
+    stopRecommendPolling();
     await logout().catch(() => undefined);
     setLoggedIn(false);
     setPlaylists([]);
     setSelectedPlaylist(null);
     setPrepareStatus(null);
     setPlaylistResult(null);
+    setRecommendStatus(null);
+    setPlaylistLoading(false);
   };
 
-  const renderLibraryMode = () => {
+  const promptDisabledReason = (): string | null => {
+    if (!selectedPlaylist) {
+      return "Pick one of your playlists below to start.";
+    }
+    if (prepareStatus?.state === "error") {
+      return "Preparing this playlist failed. Pick it again to retry.";
+    }
+    if (prepareStatus?.state !== "done") {
+      return `Reading lyrics for "${selectedPlaylist.name}"... the prompt unlocks when it finishes.`;
+    }
+    return null;
+  };
+
+  const renderLibrary = () => {
     if (!authChecked) {
       return <div className="stage-tracks-empty">Checking Spotify session...</div>;
     }
@@ -199,14 +233,6 @@ function App() {
           </button>
         </div>
 
-        {libraryError && <div className="error-banner">{libraryError}</div>}
-
-        <PlaylistPicker
-          playlists={playlists}
-          selectedId={selectedPlaylist?.id ?? null}
-          onSelect={handleSelectPlaylist}
-        />
-
         {selectedPlaylist && prepareStatus && (
           <div className="prepare-panel">
             <div className="prepare-panel-title">Preparing "{selectedPlaylist.name}"</div>
@@ -214,11 +240,28 @@ function App() {
           </div>
         )}
 
-        {selectedPlaylist && prepareStatus?.state === "done" && (
-          <PromptForm onSubmit={handlePlaylistSubmit} isLoading={playlistLoading} />
+        <PromptForm
+          onSubmit={handlePlaylistSubmit}
+          isLoading={playlistLoading}
+          disabledReason={promptDisabledReason()}
+        />
+
+        {playlistLoading && recommendStatus && (
+          <div className="prepare-panel">
+            <div className="prepare-panel-title">Building your playlist</div>
+            <RecommendProgress status={recommendStatus} />
+          </div>
         )}
 
+        {libraryError && <div className="error-banner">{libraryError}</div>}
+
         {playlistResult && <PlaylistResults result={playlistResult} />}
+
+        <PlaylistPicker
+          playlists={playlists}
+          selectedId={selectedPlaylist?.id ?? null}
+          onSelect={handleSelectPlaylist}
+        />
       </div>
     );
   };
@@ -232,29 +275,7 @@ function App() {
         </p>
       </header>
 
-      <ModeSwitch mode={mode} onChange={setMode} />
-
-      {mode === "discover" ? (
-        <>
-          <PromptForm onSubmit={handleDiscoverSubmit} isLoading={discoverLoading} />
-
-          {discoverError && <div className="error-banner">{discoverError}</div>}
-
-          {decision && (
-            <main className="results">
-              <DecisionTrace decision={decision} />
-              <section className="playlist">
-                <h2 className="section-title">Playlist</h2>
-                {decision.stages.map((stage, index) => (
-                  <StageTracks key={stage.name} name={stage.name} tracks={stage.tracks} index={index} />
-                ))}
-              </section>
-            </main>
-          )}
-        </>
-      ) : (
-        renderLibraryMode()
-      )}
+      {renderLibrary()}
     </div>
   );
 }

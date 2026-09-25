@@ -1,9 +1,9 @@
 import type {
   MeResponse,
-  PlaylistRecommendResponse,
   PlaylistSummary,
   PrepareStatus,
-  RecommendResponse,
+  RecommendJobStarted,
+  RecommendJobStatus,
 } from "./types/api";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
@@ -51,13 +51,6 @@ export async function logout(): Promise<void> {
   await requestJson<{ logged_out: boolean }>("/auth/logout", { method: "POST" });
 }
 
-export async function fetchRecommendation(prompt: string): Promise<RecommendResponse> {
-  return requestJson<RecommendResponse>("/recommend", {
-    method: "POST",
-    body: JSON.stringify({ prompt }),
-  });
-}
-
 export async function fetchPlaylists(): Promise<PlaylistSummary[]> {
   return requestJson<PlaylistSummary[]>("/playlists");
 }
@@ -72,12 +65,16 @@ export async function fetchPrepareStatus(playlistId: string): Promise<PrepareSta
   return requestJson<PrepareStatus>(`/playlists/${playlistId}/status`);
 }
 
-export async function fetchPlaylistRecommendation(
+export async function startRecommendJob(
   playlistId: string,
   prompt: string,
-): Promise<PlaylistRecommendResponse> {
-  return requestJson<PlaylistRecommendResponse>(`/playlists/${playlistId}/recommend`, {
+): Promise<RecommendJobStarted> {
+  return requestJson<RecommendJobStarted>(`/playlists/${playlistId}/recommend`, {
     method: "POST",
     body: JSON.stringify({ prompt }),
   });
+}
+
+export async function fetchRecommendJob(jobId: string): Promise<RecommendJobStatus> {
+  return requestJson<RecommendJobStatus>(`/recommend-jobs/${jobId}`);
 }

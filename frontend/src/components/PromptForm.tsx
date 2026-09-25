@@ -13,16 +13,18 @@ interface PromptFormProps {
   onSubmit: (prompt: string) => void;
   isLoading: boolean;
   examples?: string[];
+  disabledReason?: string | null;
 }
 
-export function PromptForm({ onSubmit, isLoading, examples }: PromptFormProps) {
+export function PromptForm({ onSubmit, isLoading, examples, disabledReason }: PromptFormProps) {
   const [prompt, setPrompt] = useState("");
+  const disabled = isLoading || Boolean(disabledReason);
   const examplePrompts = examples ?? DEFAULT_EXAMPLE_PROMPTS;
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
     const trimmed = prompt.trim();
-    if (trimmed.length === 0) {
+    if (trimmed.length === 0 || disabled) {
       return;
     }
     onSubmit(trimmed);
@@ -42,12 +44,13 @@ export function PromptForm({ onSubmit, isLoading, examples }: PromptFormProps) {
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
           placeholder="Describe how you feel and what you want..."
-          disabled={isLoading}
+          disabled={disabled}
         />
-        <button className="prompt-submit" type="submit" disabled={isLoading}>
+        <button className="prompt-submit" type="submit" disabled={disabled}>
           {isLoading ? "Deciding..." : "Get playlist"}
         </button>
       </form>
+      {disabledReason && <p className="prompt-hint">{disabledReason}</p>}
       <div className="example-prompts">
         {examplePrompts.map((example) => (
           <button
@@ -55,7 +58,7 @@ export function PromptForm({ onSubmit, isLoading, examples }: PromptFormProps) {
             type="button"
             className="example-chip"
             onClick={() => handleExampleClick(example)}
-            disabled={isLoading}
+            disabled={disabled}
           >
             {example}
           </button>
