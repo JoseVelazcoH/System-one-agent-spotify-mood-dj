@@ -8,6 +8,8 @@ dist/
 **/data/*.parquet
 **/data/*.csv
 **/data/*.db
+*.db-wal
+*.db-shm
 *.db
 *.log
 .DS_Store
