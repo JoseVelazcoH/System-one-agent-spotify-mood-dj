@@ -54,6 +54,7 @@ class RecommendJobManager:
         self._jobs: dict[str, RecommendJobProgress] = {}
         self._finished_at: dict[str, float] = {}
         self._running_job_id: dict[tuple[str, str], str] = {}
+        self._owner_by_job_id: dict[str, str] = {}
 
     def start(self, session_id: str, playlist_id: str, prompt: str, access_token: str) -> str:
         """Start a job for `(session_id, playlist_id)`, reusing one already running."""
@@ -67,6 +68,7 @@ class RecommendJobManager:
             job_id = uuid.uuid4().hex
             self._running_job_id[key] = job_id
             self._jobs[job_id] = RecommendJobProgress()
+            self._owner_by_job_id[job_id] = session_id
 
         thread = threading.Thread(
             target=self._run, args=(key, job_id, prompt, playlist_id, access_token), daemon=True
@@ -74,8 +76,11 @@ class RecommendJobManager:
         thread.start()
         return job_id
 
-    def status(self, job_id: str) -> RecommendJobProgress | None:
+    def status(self, job_id: str, session_id: str) -> RecommendJobProgress | None:
+        """Return the job only to the session that started it; others see None (404)."""
         with self._lock:
+            if self._owner_by_job_id.get(job_id) != session_id:
+                return None
             return self._jobs.get(job_id)
 
     def _run(self, key: tuple[str, str], job_id: str, prompt: str, playlist_id: str, access_token: str) -> None:
@@ -112,3 +117,4 @@ class RecommendJobManager:
         for jid in expired:
             self._jobs.pop(jid, None)
             self._finished_at.pop(jid, None)
+            self._owner_by_job_id.pop(jid, None)

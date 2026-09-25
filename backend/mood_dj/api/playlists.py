@@ -126,9 +126,10 @@ def recommend_from_playlist(
 def recommend_job_status(
     job_id: str,
     tokens: SpotifyTokens = Depends(get_current_tokens),
+    session_id: str = Depends(get_session_id),
     recommend_job_manager: RecommendJobManager = Depends(get_recommend_job_manager),
 ):
-    job = recommend_job_manager.status(job_id)
+    job = recommend_job_manager.status(job_id, session_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Recommend job not found.")
 

@@ -131,12 +131,14 @@ class FakeRecommendJobManager:
     def __init__(self, job: RecommendJobProgress | None = None) -> None:
         self.job = job
         self.started: list[tuple[str, str, str, str]] = []
+        self.status_calls: list[tuple[str, str]] = []
 
     def start(self, session_id, playlist_id, prompt, access_token) -> str:
         self.started.append((session_id, playlist_id, prompt, access_token))
         return "job-1"
 
-    def status(self, job_id: str) -> RecommendJobProgress | None:
+    def status(self, job_id: str, session_id: str) -> RecommendJobProgress | None:
+        self.status_calls.append((job_id, session_id))
         if job_id != "job-1":
             return None
         return self.job
@@ -210,6 +212,7 @@ def test_recommend_job_status_returns_404_for_unknown_job() -> None:
         access_token="tok", refresh_token="ref", expires_at=99999999999.0
     )
     app.dependency_overrides[get_recommend_job_manager] = lambda: FakeRecommendJobManager(job=None)
+    app.dependency_overrides[get_session_id] = lambda: "session-1"
     client = TestClient(app)
 
     response = client.get("/recommend-jobs/unknown")
@@ -223,6 +226,7 @@ def test_recommend_job_status_reports_running_progress() -> None:
     )
     job = RecommendJobProgress(state=RecommendJobState.RUNNING, phase="judging lyrics", processed=3, total=10)
     app.dependency_overrides[get_recommend_job_manager] = lambda: FakeRecommendJobManager(job=job)
+    app.dependency_overrides[get_session_id] = lambda: "session-1"
     client = TestClient(app)
 
     response = client.get("/recommend-jobs/job-1")
@@ -244,6 +248,7 @@ def test_recommend_job_status_returns_mapped_result_when_done() -> None:
         state=RecommendJobState.DONE, phase="building playlist", processed=1, total=1, result=_sample_recommendation()
     )
     app.dependency_overrides[get_recommend_job_manager] = lambda: FakeRecommendJobManager(job=job)
+    app.dependency_overrides[get_session_id] = lambda: "session-1"
     client = TestClient(app)
 
     response = client.get("/recommend-jobs/job-1")
@@ -261,6 +266,7 @@ def test_recommend_job_status_reports_error() -> None:
     )
     job = RecommendJobProgress(state=RecommendJobState.ERROR, error="boom")
     app.dependency_overrides[get_recommend_job_manager] = lambda: FakeRecommendJobManager(job=job)
+    app.dependency_overrides[get_session_id] = lambda: "session-1"
     client = TestClient(app)
 
     response = client.get("/recommend-jobs/job-1")
@@ -269,3 +275,18 @@ def test_recommend_job_status_reports_error() -> None:
     body = response.json()
     assert body["state"] == "error"
     assert body["error"] == "boom"
+
+
+def test_recommend_job_status_is_scoped_to_the_caller_session() -> None:
+    app.dependency_overrides[get_current_tokens] = lambda: SpotifyTokens(
+        access_token="tok", refresh_token="ref", expires_at=99999999999.0
+    )
+    app.dependency_overrides[get_session_id] = lambda: "session-7"
+    job_manager = FakeRecommendJobManager(job=None)
+    app.dependency_overrides[get_recommend_job_manager] = lambda: job_manager
+    client = TestClient(app)
+
+    response = client.get("/recommend-jobs/job-1")
+
+    assert response.status_code == 404
+    assert job_manager.status_calls == [("job-1", "session-7")]

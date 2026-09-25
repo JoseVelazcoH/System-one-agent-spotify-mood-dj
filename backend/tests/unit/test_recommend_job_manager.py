@@ -31,7 +31,7 @@ class BlockingUseCase:
 def test_status_is_none_for_unknown_job() -> None:
     manager = RecommendJobManager(use_case_factory=lambda: BlockingUseCase())
 
-    assert manager.status("nope") is None
+    assert manager.status("nope", "session-1") is None
 
 
 def test_start_runs_job_and_status_becomes_done() -> None:
@@ -41,12 +41,12 @@ def test_start_runs_job_and_status_becomes_done() -> None:
 
     job_id = manager.start("session-1", "playlist-1", "prompt", "token")
     for _ in range(50):
-        status = manager.status(job_id)
+        status = manager.status(job_id, "session-1")
         if status is not None and status.state is RecommendJobState.DONE:
             break
         time.sleep(0.02)
 
-    status = manager.status(job_id)
+    status = manager.status(job_id, "session-1")
     assert status is not None
     assert status.state is RecommendJobState.DONE
     assert status.result is not None
@@ -92,12 +92,12 @@ def test_status_reports_error_when_use_case_raises() -> None:
 
     job_id = manager.start("session-1", "playlist-1", "prompt", "token")
     for _ in range(50):
-        status = manager.status(job_id)
+        status = manager.status(job_id, "session-1")
         if status is not None and status.state is RecommendJobState.ERROR:
             break
         time.sleep(0.02)
 
-    status = manager.status(job_id)
+    status = manager.status(job_id, "session-1")
     assert status is not None
     assert status.state is RecommendJobState.ERROR
     assert status.error == "boom"
@@ -112,13 +112,24 @@ def test_progress_callback_updates_phase_and_counts() -> None:
     use_case.started.wait(timeout=5)
     use_case.release.set()
     for _ in range(50):
-        status = manager.status(job_id)
+        status = manager.status(job_id, "session-1")
         if status is not None and status.state is RecommendJobState.DONE:
             break
         time.sleep(0.02)
 
-    status = manager.status(job_id)
+    status = manager.status(job_id, "session-1")
     assert status is not None
     assert status.phase == RecommendPhase.BUILDING_PLAYLIST.value
     assert status.processed == 1
     assert status.total == 1
+
+
+def test_status_hides_jobs_owned_by_another_session() -> None:
+    use_case = BlockingUseCase()
+    use_case.release.set()
+    manager = RecommendJobManager(use_case_factory=lambda: use_case)
+
+    job_id = manager.start("session-1", "playlist-1", "prompt", "token")
+
+    assert manager.status(job_id, "session-2") is None
+    assert manager.status(job_id, "session-1") is not None
